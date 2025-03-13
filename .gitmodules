@@ -1,0 +1,3 @@
+[submodule "face-recognition-attendance"]
+	path = face-recognition-attendance
+	url = https://github.com/AchalG2380/face-recognition-attendance.git 
