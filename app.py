@@ -12,7 +12,7 @@ from flask_socketio import SocketIO
 
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = "supersecretkey"
+app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
 socketio = SocketIO(app)
 
 UPLOAD_FOLDER = "static/employees"
@@ -23,10 +23,10 @@ os.makedirs(VISITOR_FOLDER, exist_ok=True)
 # Database connection function
 def get_db_connection():
     return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="775533",
-        database="face_recognition"
+        host=os.environ.get('DB_HOST', 'localhost'),
+        user=os.environ.get('DB_USER', 'root'),
+        password=os.environ.get('DB_PASSWORD', '775533'),
+        database=os.environ.get('DB_NAME', 'face_recognition')
     )
 
 # Load known faces from database
@@ -35,28 +35,41 @@ known_face_names = []
 known_face_ids = []
 
 def load_known_faces():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, face_vector FROM employees")  
-    employees = cursor.fetchall()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, face_vector FROM employees")  
+        employees = cursor.fetchall()
 
-    encodings, names, ids = [], [], []
-    for emp_id, name, encoding in employees:
-        encoding_array = np.frombuffer(encoding, dtype=np.float64)
-        encodings.append(encoding_array)
-        names.append(name)
-        ids.append(emp_id)
+        encodings, names, ids = [], [], []
+        for emp_id, name, encoding in employees:
+            encoding_array = np.frombuffer(encoding, dtype=np.float64)
+            encodings.append(encoding_array)
+            names.append(name)
+            ids.append(emp_id)
 
-    cursor.close()
-    conn.close()
-    return encodings, names, ids
+        cursor.close()
+        conn.close()
+        return encodings, names, ids
+    except Exception as e:
+        print(f"Error loading faces: {str(e)}")
+        return [], [], []
 
 known_face_encodings, known_face_names, known_face_ids = load_known_faces()
 
-camera = cv2.VideoCapture(0)
+# Initialize camera only when needed
+camera = None
+
+def get_camera():
+    global camera
+    if camera is None:
+        camera = cv2.VideoCapture(0)
+    return camera
+
 last_recognized = {}
 
 def generate_frames():
+    camera = get_camera()
     while True:
         success, frame = camera.read()
         if not success:
@@ -126,7 +139,8 @@ def login_R():
 @app.route('/login_register', methods=['POST'])
 def login_register():
     password = request.form.get('password')
-    if password == "123456":
+    admin_password = os.environ.get('ADMIN_PASSWORD', '123456')
+    if password == admin_password:
         session['admin_logged_in'] = True
         flash("Welcome, Admin!", "success")
         return redirect('/register')
@@ -137,7 +151,8 @@ def login_register():
 @app.route('/login_attendance', methods=['POST'])
 def login_attendance():
     password = request.form.get('password')
-    if password == "123456":
+    admin_password = os.environ.get('ADMIN_PASSWORD', '123456')
+    if password == admin_password:
         session['admin_logged_in'] = True
         flash("Welcome, Admin!", "success")
         return redirect('/attendance')
@@ -211,6 +226,10 @@ def register_employee():
         cursor.close()
         conn.close()
 
+        # Reload known faces after registration
+        global known_face_encodings, known_face_names, known_face_ids
+        known_face_encodings, known_face_names, known_face_ids = load_known_faces()
+
         flash('Employee Registered Successfully', 'success')
         return redirect(url_for('index'))
     except Exception as e:
@@ -219,6 +238,7 @@ def register_employee():
 
 @app.route('/capture', methods=['POST'])
 def capture_image():
+    camera = get_camera()
     success, frame = camera.read()
     if success:
         save_path = "static/employees"
@@ -259,4 +279,7 @@ def notify_entry():
     return jsonify({'status': 'success'})
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
+    # Use the PORT environment variable provided by Heroku
+    port = int(os.environ.get("PORT", 5000))
+    # Use eventlet as the async mode for socketio
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
